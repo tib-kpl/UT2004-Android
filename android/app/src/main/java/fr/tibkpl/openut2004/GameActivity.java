@@ -46,6 +46,10 @@ public class GameActivity extends Activity {
     private volatile boolean finishing;
     private boolean resumed;
     private java.util.List<String> availableLanguages;
+    private GameSettingsMenu settingsMenu;
+    private View settingsGear;
+    private File gameRoot;
+    private final GameMenuShortcut settingsShortcut = new GameMenuShortcut(this::openSettings, this::dispatchKeyEvent);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -124,10 +128,11 @@ public class GameActivity extends Activity {
             root.addView(new MenuCursorView(this, input), 1, new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
+            gameRoot = config.gameRoot;
             availableLanguages = GameData.detectLanguages(config.gameRoot, config.patchDir);
             String language = GameData.getLanguage(this, availableLanguages);
             updateInputModeButton();
-            GameInstaller.prepareConfig(config, width, height, language);
+            GameInstaller.prepareConfig(config, width, height, language, GameData.getFpsCap(this));
             boolean retry = getIntent().getBooleanExtra(EXTRA_SOFTWARE_RETRY, false);
             String renderer = GameData.getRenderer(this);
             boolean gpu = !retry && runtime.gpuAvailable() && !"software".equals(renderer)
@@ -174,7 +179,7 @@ public class GameActivity extends Activity {
                     // fonctionne (sinon l'echec ne vient pas du GPU)
                     Log.w(TAG, "Echec au demarrage en rendu GPU, essai en rendu logiciel");
                     finishing = true;
-                    runtime.stop();
+                    stopRuntime();
                     Intent retry = new Intent(getIntent()).putExtra(EXTRA_SOFTWARE_RETRY, true);
                     finish();
                     startActivity(retry);
@@ -205,11 +210,73 @@ public class GameActivity extends Activity {
         lp.setMargins(0, size / 4, size / 4, 0);
         gear.setOnClickListener(v -> openSettings());
         root.addView(gear, lp);
+        settingsGear = gear;
+        // Rouage pour l'ecran tactile seulement : masque des qu'une manette ou un clavier est branche
+        // (Select + Start ouvre alors le meme menu).
+        gear.post(new Runnable() {
+            @Override public void run() {
+                if (isFinishing() || isDestroyed()) return;
+                gear.setVisibility(touchOnly() ? View.VISIBLE : View.GONE);
+                gear.postDelayed(this, 750);
+            }
+        });
     }
 
+    private boolean touchOnly() {
+        for (int id : android.view.InputDevice.getDeviceIds()) {
+            android.view.InputDevice device = android.view.InputDevice.getDevice(id);
+            if (device == null || device.isVirtual()) continue;
+            if (ControllerInput.isController(device)) return false;
+            if ((device.getSources() & android.view.InputDevice.SOURCE_KEYBOARD) == android.view.InputDevice.SOURCE_KEYBOARD
+                    && device.getKeyboardType() == android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC) return false;
+        }
+        return true;
+    }
+
+    /** Menu des reglages en jeu (theme Unreal Tournament) ; la partie est figee tant qu'il est ouvert. */
     private void openSettings() {
-        startActivityForResult(new Intent(this, LauncherActivity.class).setAction(LauncherActivity.ACTION_SETTINGS)
-                .putExtra(LauncherActivity.EXTRA_RETURN_TO_GAME, true), 101);
+        if (isFinishing() || gameRoot == null) return;
+        if (settingsMenu != null && settingsMenu.isShowing()) return;
+        if (input != null) input.setPaused(true);
+        if (audio != null) audio.setPaused(true);
+        settingsMenu = AndroidSettingsPanel.open(this, gameRoot, availableLanguages, result -> {
+            settingsMenu = null;
+            hideSystemBars();
+            if (resumed) {
+                if (input != null) input.setPaused(false);
+                if (audio != null) audio.setPaused(false);
+            }
+            if (fpsCounter != null) fpsCounter.setVisibility(GameData.showFps(this) ? View.VISIBLE : View.GONE);
+            onSettingsResult(result);
+        });
+    }
+
+    private boolean runtimeStopped;
+
+    /**
+     * Arrete le moteur une seule fois : l'arret tue tous les processus de l'appli, donc un second
+     * arret (onDestroy de cet ecran) tuerait le moteur de l'ecran de relance deja demarre.
+     */
+    private void stopRuntime() {
+        if (runtime == null || runtimeStopped) return;
+        runtimeStopped = true;
+        runtime.stop();
+    }
+
+    private void onSettingsResult(int result) {
+        if (result == AndroidSettingsPanel.KEYBOARD) openGameKeyboard();
+        else if (result == AndroidSettingsPanel.INPUT_MODE) toggleInputMode();
+        else if (result == AndroidSettingsPanel.RESTART) {
+            // Meme sequence que le nouvel essai en rendu logiciel : arret du moteur, puis relance
+            finishing = true;
+            stopRuntime();
+            Intent again = new Intent(getIntent());
+            finish();
+            startActivity(again);
+        } else if (result == AndroidSettingsPanel.DATA) {
+            startActivityForResult(new Intent(this, LauncherActivity.class).setAction(LauncherActivity.ACTION_SETTINGS)
+                    .putExtra(LauncherActivity.EXTRA_RETURN_TO_GAME, true), 101);
+        }
     }
 
     /** Explicit mode: UT2004 also captures the mouse in some menu screens. */
@@ -335,6 +402,8 @@ public class GameActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // Select + Start (dans un ordre ou l'autre) ouvre le menu ; un appui isole est rejoue au jeu.
+        if (settingsMenu == null && settingsShortcut.key(event)) return true;
         int keyCode = ControllerInput.key(event);
         if (input != null && input.isMenuMode() && keyCode == KeyEvent.KEYCODE_BUTTON_Y) {
             if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) openGameKeyboard();
@@ -378,7 +447,7 @@ public class GameActivity extends Activity {
     @Override
     protected void onDestroy() {
         finishing = true;
-        if (runtime != null) runtime.stop();
+        stopRuntime();
         if (audio != null) audio.stop();
         if (lanNetwork != null) lanNetwork.close();
         if (controllerMonitor != null) controllerMonitor.close();
@@ -404,6 +473,7 @@ public class GameActivity extends Activity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) hideSystemBars();
+        else settingsShortcut.reset();
     }
 
     @SuppressWarnings("deprecation")

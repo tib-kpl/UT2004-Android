@@ -338,7 +338,7 @@ final class GameInstaller {
      * ~/.ut2004/System/UT2004.ini : cree depuis Default.ini du moteur arm64 au premier
      * lancement, puis rendu OpenGL et resolution plein ecran au format de l'ecran.
      */
-    static void prepareConfig(LaunchConfig config, int width, int height, String language) throws IOException {
+    static void prepareConfig(LaunchConfig config, int width, int height, String language, int fpsCap) throws IOException {
         File ini = new File(config.homeDir, ".ut2004/System/UT2004.ini");
         List<String> lines;
         if (ini.isFile()) {
@@ -360,6 +360,10 @@ final class GameInstaller {
             Ini.set(lines, section, "StartupFullscreen", "True");
         }
         Ini.set(lines, "SDLDrv.SDLClient", "UseJoystick", "False");
+        // Limite de FPS du moteur (0 = valeurs par defaut du patch : 200 menu, 260 hors ligne, 250 en ligne)
+        Ini.set(lines, "SDLDrv.SDLClient", "MaxMenuFrameRate", Integer.toString(fpsCap > 0 ? fpsCap : 200));
+        Ini.set(lines, "SDLDrv.SDLClient", "MaxOfflineFrameRate", Integer.toString(fpsCap > 0 ? fpsCap : 260));
+        Ini.set(lines, "SDLDrv.SDLClient", "MaxOnlineFrameRate", Integer.toString(fpsCap > 0 ? fpsCap : 250));
         Ini.set(lines, "Engine.GameEngine", "MainMenuClass", "GUI2K4.UT2K4MainMenuWS");
         mkdirs(ini.getParentFile());
         Files.write(ini.toPath(), String.join("\n", lines).concat("\n").getBytes(StandardCharsets.ISO_8859_1));

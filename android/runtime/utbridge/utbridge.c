@@ -33,6 +33,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -48,6 +50,7 @@ static int paused;
 static pthread_mutex_t pause_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pause_cond = PTHREAD_COND_INITIALIZER;
 static FILE *logf;
+static uint64_t *frame_counter;
 static FILE *stats_file;
 static uint64_t stats_start;
 static unsigned stats_frames;
@@ -464,6 +467,16 @@ static void bridge_start(void)
         snprintf(path, sizeof(path), "%s/render-fps.txt", dir);
         stats_file = fopen(path, "w");
     }
+    {   /* /tmp/fb/frame : compteur d'images (8 octets), lu par l'appli (FramebufferView) */
+        int fd = open("/tmp/fb/frame", O_RDWR | O_CREAT, 0666);
+        if (fd >= 0) {
+            if (ftruncate(fd, 8) == 0) {
+                void *map = mmap(NULL, 8, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+                if (map != MAP_FAILED) frame_counter = (uint64_t *)map;
+            }
+            close(fd);
+        }
+    }
     logmsg("utbridge: demarre (port %s)\n", getenv("UT_INPUT_PORT") ? getenv("UT_INPUT_PORT") : "?");
     XInitThreads();
     if (pthread_create(&thread, NULL, input_thread, NULL) == 0) pthread_detach(thread);
@@ -484,6 +497,9 @@ bool SDL_GL_SwapWindow(SDL_Window *window)
     int w, h;
     if (!real_swap) real_swap = (bool (*)(SDL_Window *))dlsym(RTLD_NEXT, "SDL_GL_SwapWindow");
     ret = real_swap(window);
+    /* Numero d'image pour l'appli : elle n'envoie au GPU que les images nouvelles (sinon elle
+     * renvoie tout l'ecran X a chaque rafraichissement, sans rapport avec le rythme du moteur). */
+    if (frame_counter && ret) __atomic_add_fetch(frame_counter, 1, __ATOMIC_RELEASE);
     sync_engine_gui();
     if (stats_file && ret) {
         uint64_t now = SDL_GetTicksNS();

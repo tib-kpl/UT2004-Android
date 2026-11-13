@@ -66,6 +66,11 @@ final class GameData {
         prefs(context).edit().putInt(KEY_RENDER_HEIGHT, height).apply();
     }
 
+    /** Limites de FPS proposees (0 = sans limite) ; 60 par defaut : un rythme regulier sur un ecran 60 / 120 Hz. */
+    static final int[] FPS_CAPS = {30, 40, 60, 90, 120, 0};
+    static int getFpsCap(Context context) { return prefs(context).getInt("fps_cap", 60); }
+    static void saveFpsCap(Context context, int cap) { prefs(context).edit().putInt("fps_cap", cap).apply(); }
+
     static String getRenderer(Context context) { return prefs(context).getString(KEY_RENDERER, "auto"); }
     static boolean showFps(Context context) { return prefs(context).getBoolean(KEY_SHOW_FPS, false); }
     static void saveGraphics(Context context, int height, String renderer, boolean fps) {

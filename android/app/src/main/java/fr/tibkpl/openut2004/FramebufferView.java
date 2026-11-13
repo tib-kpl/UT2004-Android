@@ -55,6 +55,9 @@ final class FramebufferView extends GLSurfaceView {
         private boolean textureAllocated;
         private FloatBuffer quad;
         private long lastAttempt;
+        private ByteBuffer counter;
+        private long lastCounterAttempt;
+        private long lastFrame = -2;
 
         FbRenderer(File file) {
             this.file = file;
@@ -89,14 +92,21 @@ final class FramebufferView extends GLSurfaceView {
             if (pixels == null && !openFramebuffer()) return;
 
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
-            pixels.position(0);
-            if (!textureAllocated) {
-                GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, fbWidth, fbHeight, 0,
-                        GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixels);
-                textureAllocated = true;
-            } else {
-                GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, fbWidth, fbHeight,
-                        GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixels);
+            // Une image du moteur = un envoi au GPU (le compteur est ecrit par utbridge a chaque
+            // echange d'image) ; sans compteur (ancien runtime), comme avant : a chaque rafraichissement.
+            long frame = readFrameCounter();
+            boolean fresh = frame < 0 || frame != lastFrame || !textureAllocated;
+            lastFrame = frame;
+            if (fresh) {
+                pixels.position(0);
+                if (!textureAllocated) {
+                    GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, fbWidth, fbHeight, 0,
+                            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixels);
+                    textureAllocated = true;
+                } else {
+                    GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, fbWidth, fbHeight,
+                            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixels);
+                }
             }
 
             if (quad == null) quad = buildQuad();
@@ -110,6 +120,24 @@ final class FramebufferView extends GLSurfaceView {
             GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 16, quad);
             GLES20.glEnableVertexAttribArray(aTex);
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        }
+
+        /** Compteur d'images ecrit par utbridge (/tmp/fb/frame) ; -1 s'il n'existe pas. */
+        private long readFrameCounter() {
+            if (counter == null) {
+                long now = System.currentTimeMillis();
+                if (now - lastCounterAttempt < 500) return -1;
+                lastCounterAttempt = now;
+                File f = new File(file.getParentFile(), "frame");
+                if (!f.isFile() || f.length() < 8) return -1;
+                try (RandomAccessFile raf = new RandomAccessFile(f, "r");
+                     FileChannel channel = raf.getChannel()) {
+                    counter = channel.map(FileChannel.MapMode.READ_ONLY, 0, 8).order(ByteOrder.LITTLE_ENDIAN);
+                } catch (IOException e) {
+                    return -1;
+                }
+            }
+            return counter.getLong(0);
         }
 
         /** Mappe le fichier XWD une fois que Xvfb l'a cree. */
