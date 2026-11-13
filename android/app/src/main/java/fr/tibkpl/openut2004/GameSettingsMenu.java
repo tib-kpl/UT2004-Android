@@ -111,7 +111,7 @@ final class GameSettingsMenu extends Dialog {
             if (width >= 560) button.setCompoundDrawables(glyph, null, null, null);
             button.setCompoundDrawablePadding(dp(10));
             glyphs.add(glyph);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(names.size() > 4 ? 36 : 48));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(names.size() > 5 ? 32 : names.size() > 4 ? 36 : 48));
             lp.bottomMargin = dp(4);
             tabList.addView(button, lp);
             tabs.add(button);

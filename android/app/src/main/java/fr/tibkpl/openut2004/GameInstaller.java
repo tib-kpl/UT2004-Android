@@ -338,7 +338,8 @@ final class GameInstaller {
      * ~/.ut2004/System/UT2004.ini : cree depuis Default.ini du moteur arm64 au premier
      * lancement, puis rendu OpenGL et resolution plein ecran au format de l'ecran.
      */
-    static void prepareConfig(LaunchConfig config, int width, int height, String language, int fpsCap) throws IOException {
+    static void prepareConfig(LaunchConfig config, int width, int height, String language, int fpsCap,
+            boolean aimHelp) throws IOException {
         File ini = new File(config.homeDir, ".ut2004/System/UT2004.ini");
         List<String> lines;
         if (ini.isFile()) {
@@ -367,6 +368,15 @@ final class GameInstaller {
         Ini.set(lines, "Engine.GameEngine", "MainMenuClass", "GUI2K4.UT2K4MainMenuWS");
         mkdirs(ini.getParentFile());
         Files.write(ini.toPath(), String.join("\n", lines).concat("\n").getBytes(StandardCharsets.ISO_8859_1));
+        // Aide a la visee du moteur (hors ligne seulement) : reglage du joueur, dans User.ini
+        File user = new File(ini.getParentFile(), "User.ini");
+        File defaultUser = new File(config.patchDir, "SystemARM64/DefUser.ini");
+        File source = user.isFile() ? user : defaultUser;
+        if (source.isFile()) {
+            List<String> userLines = new ArrayList<>(Files.readAllLines(source.toPath(), StandardCharsets.ISO_8859_1));
+            Ini.set(userLines, "Engine.PlayerController", "bAimingHelp", aimHelp ? "True" : "False");
+            Files.write(user.toPath(), String.join("\n", userLines).concat("\n").getBytes(StandardCharsets.ISO_8859_1));
+        }
     }
 
     // ---- Utilitaires ----

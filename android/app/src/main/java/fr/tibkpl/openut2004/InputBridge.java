@@ -118,6 +118,21 @@ final class InputBridge {
 
     // Etat de la manette
     private volatile float aimX, aimY;
+    private volatile AimSettings.Snapshot aim = new AimSettings.Snapshot();
+    private final Object gyroLock = new Object();
+    private float gyroDx, gyroDy;
+
+    /** Reglages d'aide a la visee (lus par la boucle de visee, pris en compte tout de suite). */
+    void setAim(AimSettings.Snapshot snapshot) { aim = snapshot; }
+
+    /** Gyroscope : deplacement de visee en pixels (ignore dans les menus). */
+    void addGyro(float dx, float dy) {
+        if (menuMode) return;
+        synchronized (gyroLock) {
+            gyroDx += dx;
+            gyroDy += dy;
+        }
+    }
     private volatile boolean menuMode = true;
     private int pointerWidth = 1280, pointerHeight = 720;
     private volatile int pointerX = 640, pointerY = 360;
@@ -300,8 +315,9 @@ final class InputBridge {
         setMoveKey(3, menuMode ? XK_RIGHT : 'd', lx > MOVE_THRESHOLD);
 
         // Stick droit -> souris (deplacement continu, voir aimLoop)
-        aimX = deadzone(event, ControllerInput.rightAxis(event, true));
-        aimY = deadzone(event, ControllerInput.rightAxis(event, false));
+        // (valeurs brutes : la zone morte et la courbe sont appliquees par aimLoop, reglables)
+        aimX = Math.max(-1f, Math.min(1f, event.getAxisValue(ControllerInput.rightAxis(event, true))));
+        aimY = Math.max(-1f, Math.min(1f, event.getAxisValue(ControllerInput.rightAxis(event, false))));
 
         // Gachettes : fusion des axes et des touches, sans actions en double.
         analogTrigger(0, Math.max(event.getAxisValue(MotionEvent.AXIS_LTRIGGER), event.getAxisValue(MotionEvent.AXIS_BRAKE)));
@@ -362,12 +378,46 @@ final class InputBridge {
     /** Deplace la souris selon le stick droit, 120 fois par seconde (courbe quadratique). */
     private void aimLoop() {
         float accX = 0f, accY = 0f;
+        long heldSince = 0;
         while (!closed) {
+            AimSettings.Snapshot a = aim;
             float x = aimX, y = aimY;
-            if (x != 0f || y != 0f) {
-                float speed = menuMode ? 6f : AIM_SPEED;
-                accX += Math.signum(x) * x * x * speed;
-                accY += Math.signum(y) * y * y * speed;
+            float dz = menuMode ? STICK_DEADZONE : Math.max(.05f, a.deadzone);
+            float mag = (float) Math.sqrt(x * x + y * y);
+            boolean moved = false;
+            if (mag > dz) {
+                // Zone morte radiale : la vitesse repart de zero au bord de la zone morte.
+                float s = Math.min(1f, (mag - dz) / (1f - dz));
+                float shaped = menuMode ? s * s : AimSettings.curve(a.curve, s);
+                float boost = 1f;
+                if (!menuMode && a.accel > 0f && s > .9f) {
+                    // Acceleration de rotation : stick tenu a fond, la vitesse monte en ~0,35 s
+                    long now = System.nanoTime();
+                    if (heldSince == 0) heldSince = now;
+                    float t = (now - heldSince) / 1e9f - .15f;
+                    if (t > 0f) boost += a.accel * Math.min(1f, t / .35f);
+                } else if (s < .7f) {
+                    heldSince = 0;
+                }
+                float speed = menuMode ? 6f : AIM_SPEED * boost;
+                accX += x / mag * shaped * speed * (menuMode ? 1f : a.sensX);
+                accY += y / mag * shaped * speed * (menuMode ? 1f : a.sensY * (a.invertY ? -1f : 1f));
+                moved = true;
+            } else {
+                heldSince = 0;
+            }
+            float gx, gy;
+            synchronized (gyroLock) {
+                gx = gyroDx;
+                gy = gyroDy;
+                gyroDx = gyroDy = 0f;
+            }
+            if (gx != 0f || gy != 0f) {
+                accX += gx;
+                accY += gy;
+                moved = true;
+            }
+            if (moved) {
                 int dx = (int) accX, dy = (int) accY;
                 accX -= dx;
                 accY -= dy;

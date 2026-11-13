@@ -111,6 +111,8 @@ public class GameActivity extends Activity {
                 updateInputModeButton();
             }));
 
+            input.setAim(AimSettings.snapshot(this));
+            startGyro();
             controllerMonitor = new ControllerMonitor(this, input::resetController);
 
             Point screen = screenSize();
@@ -132,7 +134,8 @@ public class GameActivity extends Activity {
             availableLanguages = GameData.detectLanguages(config.gameRoot, config.patchDir);
             String language = GameData.getLanguage(this, availableLanguages);
             updateInputModeButton();
-            GameInstaller.prepareConfig(config, width, height, language, GameData.getFpsCap(this));
+            GameInstaller.prepareConfig(config, width, height, language, GameData.getFpsCap(this),
+                    AimSettings.engineAimHelp(this));
             boolean retry = getIntent().getBooleanExtra(EXTRA_SOFTWARE_RETRY, false);
             String renderer = GameData.getRenderer(this);
             boolean gpu = !retry && runtime.gpuAvailable() && !"software".equals(renderer)
@@ -239,6 +242,7 @@ public class GameActivity extends Activity {
         if (settingsMenu != null && settingsMenu.isShowing()) return;
         if (input != null) input.setPaused(true);
         if (audio != null) audio.setPaused(true);
+        stopGyro();
         settingsMenu = AndroidSettingsPanel.open(this, gameRoot, availableLanguages, result -> {
             settingsMenu = null;
             hideSystemBars();
@@ -247,8 +251,51 @@ public class GameActivity extends Activity {
                 if (audio != null) audio.setPaused(false);
             }
             if (fpsCounter != null) fpsCounter.setVisibility(GameData.showFps(this) ? View.VISIBLE : View.GONE);
+            if (input != null) input.setAim(AimSettings.snapshot(this));
+            startGyro();
             onSettingsResult(result);
         });
+    }
+
+    // ---- Gyroscope : visee fine en bougeant la console (reglage "Gyroscope", desactive par defaut) ----
+    private android.hardware.SensorManager sensors;
+    private android.hardware.SensorEventListener gyroListener;
+    private long lastGyroNanos;
+
+    private void startGyro() {
+        stopGyro();
+        if (input == null || !AimSettings.gyro(this)) return;
+        sensors = (android.hardware.SensorManager) getSystemService(SENSOR_SERVICE);
+        android.hardware.Sensor gyro = sensors == null ? null : sensors.getDefaultSensor(android.hardware.Sensor.TYPE_GYROSCOPE);
+        if (gyro == null) return;
+        final float scaleX = 360f * AimSettings.gyroSens(this) / 100f;
+        final float scaleY = scaleX * (AimSettings.invertY(this) ? -1f : 1f);
+        gyroListener = new android.hardware.SensorEventListener() {
+            @Override public void onSensorChanged(android.hardware.SensorEvent event) {
+                long now = event.timestamp;
+                float dt = lastGyroNanos == 0 ? 0f : Math.min(.05f, (now - lastGyroNanos) / 1e9f);
+                lastGyroNanos = now;
+                if (dt == 0f || input == null) return;
+                // Vitesses angulaires (rad/s) ramenees au repere de l'ecran selon la rotation de l'affichage
+                float wx = event.values[0], wy = event.values[1];
+                int rotation = getWindowManager().getDefaultDisplay().getRotation();
+                float sx, sy;   // axe horizontal (droite) et vertical (haut) de l'ecran
+                if (rotation == android.view.Surface.ROTATION_90) { sx = -wy; sy = wx; }
+                else if (rotation == android.view.Surface.ROTATION_270) { sx = wy; sy = -wx; }
+                else if (rotation == android.view.Surface.ROTATION_180) { sx = -wx; sy = -wy; }
+                else { sx = wx; sy = wy; }
+                // tourner a droite = rotation negative autour de l'axe vertical ; pencher le haut vers soi = viser plus bas
+                input.addGyro(-sy * dt * scaleX, sx * dt * scaleY);
+            }
+            @Override public void onAccuracyChanged(android.hardware.Sensor sensor, int accuracy) { }
+        };
+        lastGyroNanos = 0;
+        sensors.registerListener(gyroListener, gyro, android.hardware.SensorManager.SENSOR_DELAY_GAME);
+    }
+
+    private void stopGyro() {
+        if (sensors != null && gyroListener != null) sensors.unregisterListener(gyroListener);
+        gyroListener = null;
     }
 
     private boolean runtimeStopped;
@@ -429,6 +476,7 @@ public class GameActivity extends Activity {
     @Override
     protected void onPause() {
         resumed = false;
+        stopGyro();
         super.onPause();
         if (input != null) input.setPaused(true);
         if (audio != null) audio.setPaused(true);
@@ -440,6 +488,7 @@ public class GameActivity extends Activity {
         updateInputModeButton();
         if (fpsCounter != null) fpsCounter.setVisibility(GameData.showFps(this) ? View.VISIBLE : View.GONE);
         resumed = true;
+        if (input != null) startGyro();
         if (audio != null) audio.setPaused(false);
         if (input != null) input.setPaused(false);
     }
